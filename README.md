@@ -198,5 +198,4 @@ Ran in this sandbox, not just read:
 - This test run is what caught the `eval_every`-boundary gap noted above — an example of
   exactly the kind of bug this todo-list-driven rewrite was supposed to catch.
 
-Not tested here: anything touching Spark (`packing.py`, `data_quality.py`), GPU-specific
-paths (bf16 autocast, `torch.compile`, CUDA fused AdamW), and the `6.7B` preset at real scale.
+
