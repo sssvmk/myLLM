@@ -181,21 +181,6 @@ own round of real distributed testing to confirm rather than swapping blind.
   to tune, and there's no KV-cache wiring (this codebase only does full-sequence training,
   not incremental generation).
 
-## What was actually tested (this session, synthetic data, CPU)
 
-Ran in this sandbox, not just read:
-- `tests/test_model_smoke.py` — forward + backward + optimizer step for both `dense` and
-  `deepseek` archs, including the MoE aux-loss/bias-update path and the doc-boundary mask.
-- `data.py` — padding uses the reserved id (not `0`), `doc_start` synthesis when the column
-  is absent, worker-safe file listing, `DataLoader` batch collation of `(tokens, doc_start)`
-  tuples, and `MixtureIterableDataset` end-to-end (including the `sources=` subset filter,
-  verified to produce exactly the sum of the selected non-cycling sources' row counts).
-- `train.py` — a full `train_loop` run against synthetic packed shards, followed by
-  `load_checkpoint` on a fresh model/optimizer: confirmed `step` and `best_loss` correctly
-  propagate and exceed `max_steps`, confirmed the resumed model's weights and the optimizer's
-  per-parameter state (momentum buffers) match the saved run exactly, and confirmed the
-  weight-decay param-group split correctly excludes every 1-D parameter.
-- This test run is what caught the `eval_every`-boundary gap noted above — an example of
-  exactly the kind of bug this todo-list-driven rewrite was supposed to catch.
 
 
