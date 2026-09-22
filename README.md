@@ -25,7 +25,7 @@ small real sample before trusting them at full corpus scale.**
 | `main.py` | Driver (`drive(args)`), CLI entry point |
 | `tests/test_model_smoke.py` | Synthetic-data smoke test for both architectures |
 
-## What was fixed (from the earlier code review)
+
 
 - `step`/`best_loss` now propagate across epochs in `train_loop` (previously silently reset each epoch)
 - dropout is actually applied (`Block.forward`) — previously constructed but never called
@@ -47,7 +47,7 @@ small real sample before trusting them at full corpus scale.**
   `eval_every` boundaries (found by the integration test below — `best_loss` could otherwise
   stay `inf` even on a "successful" run)
 
-## What was added (this round)
+
 
 - **Multi-source data mixture** (`config.DATA_SOURCES`, `data.MixtureIterableDataset`,
   `main.py`'s `--data_root`/`--sources`): weighted sampling across sources, with
@@ -93,7 +93,7 @@ Not included: no TensorBoard/W&B integration, no downstream-benchmark evaluation
 held-out accuracy) — `evaluate()` only reports LM loss/perplexity on the held-out split, which
 is the standard pretraining-time metric, but it isn't the same as benchmark evaluation.
 
-## ZeRO / FSDP ("ZeroD-FDSP" from lecture_08)
+## ZeRO / FSDP 
 
 The earlier "parameterize the ZeroD-FDSP training framework" todo item turned out to be a
 garbled reference to **ZeRO / FSDP** from the uploaded CS336 lecture_08 slides (ZeRO stages
