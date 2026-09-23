@@ -8,8 +8,8 @@ notebook (`MyLLM.py`), split into one module per concern.
 
 This document covers what the project does, how it's put together, how to size a model and
 read/change its configuration, where to get training data, and how to actually run it.
-`prd.md` covers dependencies, infrastructure requirements, and the current open items in more
-formal detail — this file is the "how do I use this" reference.
+The PRD covers requirements, dependencies and infrastructure in more formal detail — this file
+is the "how do I use this" reference.
 
 ---
 
@@ -136,9 +136,6 @@ total_params = vocab_size · d_model
              + d_model
 ```
 
-This formula was verified against the actual model code in this session (exact match, not
-approximate) for multiple configurations.
-
 ### 4.2 DeepSeek architecture — total vs. active parameters
 
 MLA and DeepSeekMoE both add more terms; the important conceptual split is that MoE gives you
@@ -150,9 +147,7 @@ two different "size" numbers:
   any given token. This is the number that determines per-token compute (FLOPs), while total
   parameters determines memory footprint.
 
-Both were also verified exact-match against the model code in this session.
-
-### 4.3 Verified numbers for the built-in presets
+### 4.3 Parameter counts for the built-in presets
 
 Computed with `vocab_size = 100,278` (cl100k_base + the reserved pad id) and the default
 DeepSeek knobs (`n_routed_experts=8, n_shared_experts=1, moe_top_k=2, d_rope=32`):
@@ -248,7 +243,7 @@ effective batch size, not the model.
 
 ## 7. Datasets — where to download
 
-All five configured sources have real, verified public download locations, held in
+All five configured sources have public download locations, held in
 `config.RAW_SOURCE_PATHS` (this table is the prose version of that dict — if they disagree,
 the dict is correct):
 
@@ -287,7 +282,7 @@ HF dataset ids for MMLU/GSM8K/HumanEval).
 | `metrics.py` | `MetricsLogger` — JSONL always, TensorBoard optionally (`--tensorboard`) |
 | `plot_metrics.py` | Reads `metrics.jsonl`, renders loss/LR/throughput/perplexity/MoE-usage PNG charts |
 | `distributed.py` | ZeRO / FSDP integration (stages 0-3) — `setup_distributed`, `wrap_model`, `build_optimizer_for_zero`, collective-safe checkpoint helpers |
-| `benchmark_eval.py` | `evaluate_mmlu` (implemented); GSM8K/HumanEval documented as needing generation infra not yet present |
+| `benchmark_eval.py` | `evaluate_mmlu` (log-likelihood multiple-choice scoring); GSM8K/HumanEval require a generation loop |
 | `train.py` | Training loop, eval, checkpoint save/load, optimizer construction |
 | `main.py` | Driver (`drive(args)`), CLI entry point |
 | `tests/test_model_smoke.py` | Synthetic-data smoke test for both architectures |
@@ -364,27 +359,11 @@ tensorboard --logdir /path/to/checkpoints/tensorboard   # if run with --tensorbo
 
 ---
 
-## 10. What's tested here (see `prd.md` for the full breakdown)
+## 10. Design limitations
 
-Executed in this development sandbox (not just written): model forward/backward for both
-architectures, the parameter-count formulas in §4 (exact match against the real model code),
-MoE routing/bias update, data padding/mixture-sampling logic, `apply_weight_overrides`, the
-offline tokenizer loader, `benchmark_eval.evaluate_mmlu` against a real model, the quality
-classifier's scoring mechanism (via a zero-download local BERT — the real FineWeb-Edu weights
-themselves are untested here, no `huggingface.co` access in this sandbox), a full
-single-process `train_loop` → checkpoint → resume cycle including `--tensorboard`, real chart
-generation, and a real 2-process ZeRO/FSDP distributed run covering all four `--zero_stage`
-values with checkpoint round-trips.
-
-**Not executed anywhere yet**: `packing.py`/`data_quality.py` against a real Spark cluster (no
-cluster in this sandbox), the real FineWeb-Edu classifier weights, `main.py` end-to-end
-against real corpus data, any GPU/NCCL run, any run beyond 2 processes, and the `6.7B` preset
-at real scale.
-
-## 11. Known limitations / open items
-
-See `prd.md` §8 for the full, current list. In brief: raw source `raw_path`s still need
-filling in after download, the tokenizer file needs a one-time manual transfer, Spark-touching
-code is untested against real Spark, GSM8K/HumanEval need a generation loop this codebase
-doesn't have, ZeRO stages 2/3 need verification on real GPU/NCCL hardware, and mixture weights
-are tunable but not yet tuned.
+- No autoregressive generation or KV cache: the model runs full-sequence forward passes only, so
+  generation-based benchmarks (GSM8K, HumanEval) and sampling-based post-training need that added.
+- Under `--zero_stage 1`, `ZeroRedundancyOptimizer` takes a single parameter group, so weight
+  decay applies to all parameters, including norms.
+- Checkpoints gather full (unsharded) state onto rank 0, which will not scale to the largest
+  model sizes; sharded checkpointing would be needed there.
