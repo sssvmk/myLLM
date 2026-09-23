@@ -4,3 +4,5 @@ tiktoken
 pyarrow
 matplotlib
 pytest
+tensorboard
+transformers

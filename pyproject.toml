@@ -13,7 +13,9 @@ dependencies = [
     "pyspark",
     "tiktoken",
     "pyarrow",
-    "matplotlib"
+    "matplotlib",
+    "tensorboard",
+    "transformers"
 ]
 
 [project.optional-dependencies]
