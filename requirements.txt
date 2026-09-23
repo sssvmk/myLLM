@@ -1,0 +1,8 @@
+matplotlib
+pyarrow
+pyspark
+pyyaml
+tensorboard
+tiktoken
+torch
+transformers

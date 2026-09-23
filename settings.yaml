@@ -1,0 +1,90 @@
+# Editable settings for foundation_llm. No code changes needed to update paths, model sizes,
+# data sources, or the tokenizer/classifier locations -- edit this file directly.
+
+output_dir: /dbfs/FileStore/shared_uploads/muni-kumar.x.schandra@gsk.com/models/toy_gpt35/
+
+presets:
+  125M: {n_layer: 12, d_model: 768,  n_heads: 12, d_ff: 3072}
+  355M: {n_layer: 12, d_model: 1024, n_heads: 16, d_ff: 4096}
+  1.3B: {n_layer: 24, d_model: 2048, n_heads: 16, d_ff: 8192}
+  6.7B: {n_layer: 32, d_model: 4096, n_heads: 32, d_ff: 16384}
+
+tokenizer:
+  cl100k_base:
+    official_url: https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken
+    mirrors:
+      - https://huggingface.co/microsoft/Phi-3-small-8k-instruct/blob/main/cl100k_base.tiktoken
+      - https://huggingface.co/spaces/xu-song/tokenizer-arena/blob/main/vocab/gpt_35_turbo/cl100k_base.tiktoken
+    sha256: 223921b76ee99bde995b7ff738513eef100fb51d18c93597a113bcffe865b2a7
+    local_path: ""   # fill in after downloading; --tokenizer_path on the CLI overrides this
+
+# Where to download each raw corpus before packing. Fill in raw_path after downloading
+# (or internally mirroring) each one -- that's the only field packing.py needs.
+raw_source_paths:
+  web:
+    download_from: https://huggingface.co/datasets/Skylion007/openwebtext
+    homepage: https://skylion007.github.io/OpenWebTextCorpus/
+    license: "Unspecified by curator; an open replication of OpenAI's WebText corpus -- review before commercial use"
+    raw_path: ""
+  code:
+    download_from: https://huggingface.co/datasets/bigcode/the-stack-v2
+    homepage: https://www.bigcode-project.org/
+    license: "Per-file license from source repos, opt-out-respecting; see the dataset card"
+    raw_path: ""
+  wikipedia:
+    download_from: https://huggingface.co/datasets/wikimedia/wikipedia
+    homepage: https://dumps.wikimedia.org/
+    license: "CC BY-SA 4.0 / GFDL"
+    raw_path: ""
+  books:
+    download_from: https://huggingface.co/datasets/deepmind/pg19
+    homepage: https://www.gutenberg.org/
+    license: "Public domain (pre-1919 Project Gutenberg texts)"
+    raw_path: ""
+  math:
+    download_from: https://huggingface.co/datasets/open-web-math/open-web-math
+    homepage: https://github.com/EleutherAI/math-lm
+    license: "ODC-By 1.0"
+    raw_path: ""
+
+# Packed-data mixture. subdir = folder name under --data_root; weight = sampling share;
+# cycle = true means this (small) source is reshuffled/repeated so it doesn't run out early.
+data_sources:
+  - {name: web,       subdir: openwebtext, weight: 0.65, cycle: false}
+  - {name: code,      subdir: code,        weight: 0.15, cycle: false}
+  - {name: wikipedia, subdir: wikipedia,   weight: 0.10, cycle: true}
+  - {name: books,     subdir: books,       weight: 0.07, cycle: true}
+  - {name: math,      subdir: math,        weight: 0.03, cycle: true}
+
+# Benchmark dataset sources, for decontamination and benchmark_eval.py.
+eval_benchmark_sources:
+  mmlu:
+    hf_path: cais/mmlu
+    hf_config: all
+    homepage: https://github.com/hendrycks/test
+    paper: https://arxiv.org/abs/2009.03300
+    kind: multiple_choice
+    local_path: ""
+  gsm8k:
+    hf_path: openai/gsm8k
+    hf_config: main
+    homepage: https://github.com/openai/grade-school-math
+    kind: generation_exact_match
+    local_path: ""
+  humaneval:
+    hf_path: openai/openai_humaneval
+    hf_config: null
+    homepage: https://github.com/openai/human-eval
+    kind: generation_code_exec
+    local_path: ""
+
+quality_classifier:
+  model_id: HuggingFaceFW/fineweb-edu-classifier
+  homepage: https://huggingface.co/HuggingFaceFW/fineweb-edu-classifier
+  reference_annotations: HuggingFaceFW/fineweb-edu-llama3-annotations
+  description: >
+    BERT-like regression model (built on Snowflake-arctic-embed-m) scoring 'educational value'
+    0-5; trained on 450k Llama3-70B-Instruct annotations of FineWeb web samples. This is the
+    actual classifier HuggingFace used to build FineWeb-Edu -- not a toy model.
+  score_threshold: 3.0
+  local_model_path: ""
