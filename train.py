@@ -220,7 +220,7 @@ def train_loop(model, train_loader, val_loader, optimizer, scaler, scheduler, mi
                device, pad_token_id, step=0, best_loss=float("inf"), metrics: MetricsLogger = None):
   own_metrics = metrics is None
   if metrics is None:
-    metrics = MetricsLogger(args.out) if is_main_process() else NullMetricsLogger()
+    metrics = MetricsLogger(args.out, tensorboard=getattr(args, "tensorboard", False)) if is_main_process() else NullMetricsLogger()
     # only rank 0 writes metrics.jsonl -- every rank owning a MetricsLogger would mean
     # multiple processes appending to the same file concurrently
 

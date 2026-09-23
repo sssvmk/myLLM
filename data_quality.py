@@ -115,18 +115,58 @@ def quality_filter_heuristics(df: DataFrame, text_col: str = "text",
   return filtered.drop("_word_count", "_symbol_ratio", "_repeated_line_ratio")
 
 
-def quality_filter_classifier(df: DataFrame, text_col: str = "text", model_path: str = None,
-                               score_threshold: float = 0.5):
-  """STUB -- deliberately not implemented. Scoring-and-filtering with a trained quality
-  classifier (fastText or a small transformer, scored against a "reference quality" set the
-  way GPT-3 / FineWeb-Edu do) needs: (1) a positive set of known-high-quality text
-  (Wikipedia/curated references), (2) a negative/background sample of raw web text, (3) a
-  lightweight classifier (fastText is the standard cheap choice at corpus scale). None of
-  that exists in this codebase yet -- left as a stub rather than filled with a placeholder
-  heuristic that would look implemented but wasn't actually trained on anything. Use
-  quality_filter_heuristics in the meantime.
+def quality_filter_classifier(df: DataFrame, text_col: str = "text"):
+  """Scores each document with the real FineWeb-Edu classifier (config.QUALITY_CLASSIFIER --
+  HuggingFaceFW/fineweb-edu-classifier, the actual model HuggingFace used to build the
+  FineWeb-Edu dataset) and drops documents scoring below the configured threshold.
+
+  Config-driven, local-first (same pattern as tokenizer.py): tries
+  QUALITY_CLASSIFIER["local_model_path"] first (a local model directory, no network), and
+  falls back to loading QUALITY_CLASSIFIER["model_id"] directly from HuggingFace if that's
+  unset. Fill in local_model_path once you've mirrored the model into reachable storage, the
+  same way tokenizer.py's local_path works for the tokenizer.
+
+  Honesty note: loading the REAL model weights needs network access to huggingface.co (or a
+  local mirror), which this project's own dev sandbox does not have (see prd.md's tiktoken
+  section for the identical class of failure) -- so this function's Spark/pandas_udf
+  integration has not been exercised against the real fineweb-edu-classifier weights in this
+  sandbox. What HAS been verified here: the scoring mechanism itself (tokenize -> forward ->
+  regression score -> threshold) using a locally-constructed model of the same
+  architecture family, proving the pipeline is wired correctly; only the specific weights are
+  untested. See tests/test_quality_classifier_smoke.py.
   """
-  raise NotImplementedError(
-    "quality_filter_classifier needs a trained classifier + reference quality set; "
-    "use quality_filter_heuristics until one exists."
-  )
+  from config import QUALITY_CLASSIFIER
+  import torch
+  from transformers import AutoTokenizer, AutoModelForSequenceClassification
+  from pyspark.sql.types import FloatType
+
+  model_source = QUALITY_CLASSIFIER["local_model_path"] or QUALITY_CLASSIFIER["model_id"]
+  threshold = QUALITY_CLASSIFIER["score_threshold"]
+
+  # Loaded once per executor via a broadcast-safe lazy singleton pattern: the pandas_udf below
+  # is what Spark actually serializes, and it loads the model on first call per Python worker
+  # process rather than trying to serialize the model object itself.
+  _state = {}
+
+  def _get_model():
+    if "model" not in _state:
+      tok = AutoTokenizer.from_pretrained(model_source)
+      model = AutoModelForSequenceClassification.from_pretrained(model_source)
+      model.eval()
+      _state["tokenizer"] = tok
+      _state["model"] = model
+    return _state["tokenizer"], _state["model"]
+
+  def score_batch(texts):
+    tok, model = _get_model()
+    scores = []
+    with torch.no_grad():
+      for t in texts:
+        inputs = tok(t or "", return_tensors="pt", truncation=True, max_length=512)
+        logits = model(**inputs).logits
+        scores.append(float(logits.squeeze().item()))
+    return scores
+
+  score_udf = Fun.pandas_udf(score_batch, FloatType())
+  scored = df.withColumn("_edu_score", score_udf(Fun.col(text_col)))
+  return scored.filter(Fun.col("_edu_score") >= threshold).drop("_edu_score")

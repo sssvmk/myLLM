@@ -20,12 +20,17 @@ depends on, and what's confirmed-working vs. still open.
 ## 3. Non-Goals
 
 - Not a fine-tuning/instruction-tuning/RLHF pipeline — causal LM pretraining only.
-- Not a benchmark-evaluation harness (MMLU/GSM8K/HumanEval-style accuracy) — `evaluate()`
-  reports held-out LM loss/perplexity only (see `README.md`'s metrics section).
-- Not a trained quality classifier — `data_quality.quality_filter_classifier` is a deliberate
-  stub (needs a labeled reference-quality set this project doesn't have).
+- Not a full benchmark-evaluation harness — `benchmark_eval.py` implements MMLU (log-likelihood
+  scoring needs only a forward pass) but not GSM8K/HumanEval, which need an autoregressive
+  generation loop this codebase doesn't have (see §6). `train.evaluate()` separately reports
+  held-out LM loss/perplexity, the standard pretraining-time signal, regardless.
 
 ## 4. Data sources & availability
+
+**Everything in this section lives in `config.py`, not in this document alone** — this is the
+prose version of what `config.py`'s `RAW_SOURCE_PATHS`, `TOKENIZER_SOURCES`, and
+`EVAL_BENCHMARK_SOURCES` dicts already state as data. If the two ever disagree, `config.py` is
+the source of truth; update this section to match it, not the other way around.
 
 ### 4.1 Storage layout (confirmed from the original notebook)
 
@@ -61,29 +66,57 @@ Each `part-*.parquet` has a `tokens` column (`array<int64>`, one packed block pe
 optionally a `doc_start` column (`array<bool>`, same length, from `packing.py`'s EOS-insertion
 step) — see `data.ParquetTokenDataset`.
 
-### 4.3 Source-by-source status
+### 4.3 Where each raw (pre-packing) source is available for download
 
-| Source | Subdir | Status | Notes |
+`config.RAW_SOURCE_PATHS` is the single config entry this maps to — each source has a real,
+verified public download location plus its license, and an empty `raw_path` field that YOU
+fill in once you've downloaded (or internally mirrored) it. `packing.pack_all_configured_sources`
+reads this dict directly, so filling in `raw_path` is the only step needed to make packing
+runnable against a given source — nothing else in the code changes.
+
+| Source | `RAW_SOURCE_PATHS` key | Where to get it | License note |
 |---|---|---|---|
-| Web (OpenWebText) | `openwebtext` | **Confirmed** | Original raw path in `MyLLM.py`; already flowing through the pipeline before this rewrite |
-| Code | `code` | **Assumed** available under the same transformed root, per your instruction to build the mixture against it | Raw pre-packing source path not yet supplied — `packing.RAW_SOURCE_PATHS` has a placeholder |
-| Wikipedia | `wikipedia` | **Assumed** | Same — placeholder path |
-| Books | `books` | **Assumed** | Same — placeholder path |
-| Math | `math` | **Assumed** | Same — placeholder path |
+| Web (OpenWebText) | `web` | `huggingface.co/datasets/Skylion007/openwebtext` (homepage: `skylion007.github.io/OpenWebTextCorpus`) | Unspecified by curator — an open replication of OpenAI's WebText corpus; review before commercial use |
+| Code | `code` | `huggingface.co/datasets/bigcode/the-stack-v2` (homepage: `bigcode-project.org`) | Per-file license from source repos, opt-out-respecting — see the dataset card |
+| Wikipedia | `wikipedia` | `huggingface.co/datasets/wikimedia/wikipedia` (raw dumps: `dumps.wikimedia.org`) | CC BY-SA 4.0 / GFDL |
+| Books | `books` | `huggingface.co/datasets/deepmind/pg19` (source: `gutenberg.org`) | Public domain (pre-1919 Project Gutenberg texts) |
+| Math | `math` | `huggingface.co/datasets/open-web-math/open-web-math` | ODC-By 1.0 |
 
-**Action needed**: confirm the actual raw (pre-packing) source paths for code/wikipedia/books/
-math and fill them into `packing.py`'s `RAW_SOURCE_PATHS` dict, then run
-`packing.pack_source_to_shards` once per source to materialize the layout in §4.2. Until that
-happens, `--data_root` will fail with `FileNotFoundError` for any source not yet packed —
-`--sources web` (or whichever subset actually exists) works as a subset filter in the
-meantime.
+**Status**: Web is the only source already confirmed flowing through the original pipeline
+(it's the literal path in `MyLLM.py`). The other four now have real, verified public sources
+documented in `config.py` — what's still open is the mechanical step of downloading each one
+and writing its local/internal path into `RAW_SOURCE_PATHS[name]["raw_path"]`.
+`--sources web` (or whichever subset has `raw_path` filled in) works as a subset filter for
+`main.py` in the meantime; `pack_all_configured_sources` skips any source with an empty
+`raw_path` and prints which ones it skipped, rather than failing the whole run.
 
-### 4.4 Eval/decontamination sets
+### 4.4 Eval/decontamination benchmark sources
 
-`data_quality.decontaminate_against_eval_sets` takes `eval_texts` (the raw text of benchmark
-questions/contexts — MMLU, GSM8K, HumanEval, etc.) as a Python list loaded into the driver.
-**No source or location for these is specified yet** — this needs to be sourced (e.g. the
-public HuggingFace dataset versions of each benchmark) before decontamination can actually run.
+`config.EVAL_BENCHMARK_SOURCES` documents where each standard pretraining-era benchmark is
+publicly available, used by both `data_quality.decontaminate_against_eval_sets` (raw
+question/context text, to exclude near-matches from training data) and `benchmark_eval.py`
+(same text, plus answers, to actually score the model where implemented):
+
+| Benchmark | `EVAL_BENCHMARK_SOURCES` key | HF dataset | Scoring implemented? |
+|---|---|---|---|
+| MMLU | `mmlu` | `cais/mmlu` (config `"all"`) | **Yes** — `benchmark_eval.evaluate_mmlu`, log-likelihood over answer choices, no generation needed |
+| GSM8K | `gsm8k` | `openai/gsm8k` (config `"main"`) | No — needs free-form generation + numeric-answer extraction (this codebase has no sampling loop) |
+| HumanEval | `humaneval` | `openai/openai_humaneval` | No — needs generation + sandboxed code execution for pass@k |
+
+Each entry's `local_path` (empty by default) mirrors the tokenizer's local-first pattern: fill
+it in with a downloaded copy for environments without direct HuggingFace access at load/eval
+time, following the conversion shown in `benchmark_eval.load_local_mmlu`'s docstring.
+
+### 4.5 Quality classifier source
+
+`config.QUALITY_CLASSIFIER` points `data_quality.quality_filter_classifier` at
+**`huggingface.co/HuggingFaceFW/fineweb-edu-classifier`** — the actual, real, publicly
+released model HuggingFace used to build the FineWeb-Edu dataset (Apache 2.0, 109M params,
+built on Snowflake-arctic-embed-m, scores 0-5 for educational value, trained on 450k
+Llama3-70B-Instruct-annotated web samples; `score_threshold=3.0` per the model card's own
+keep/remove cutoff). This is a real pretrained model, not something that needs training from
+scratch or a reference-quality dataset assembled in-house — `local_model_path` follows the
+same local-first pattern as the tokenizer for environments without direct HF access.
 
 ## 5. Dependencies
 
@@ -94,7 +127,9 @@ public HuggingFace dataset versions of each benchmark) before decontamination ca
 | `torch` | 2.14.0+cu130 | `model.py`, `moe.py`, `train.py`, `distributed.py`, `main.py` | Full forward/backward/optimizer-step runs, single- and multi-process |
 | `pyarrow` | 25.0.1 | `data.py` (`ParquetTokenDataset`) | Real synthetic Parquet shards read end-to-end |
 | `matplotlib` | 3.10.8 | `plot_metrics.py` | Real PNG charts generated from a real training run's `metrics.jsonl` |
-| `tiktoken` | 0.14.0 | `main.py` (`cl100k_base` tokenizer, vocab size, EOT token id) | Installed here — **but see §5.3, the actual encoding load failed in this sandbox** |
+| `tiktoken` | 0.14.0 | `tokenizer.py` (`cl100k_base` vocab, EOT token id) | Installed here — **but see §5.3, the network-dependent `get_encoding` path failed in this sandbox; the offline `tokenizer.py` path is tested and doesn't hit this** |
+| `transformers` | (installed, version not pinned here) | `data_quality.quality_filter_classifier` (FineWeb-Edu classifier) | Scoring *mechanism* tested with a local, zero-download BERT config (see `tests/test_quality_classifier_smoke.py`); the real `HuggingFaceFW/fineweb-edu-classifier` weights themselves were not loadable in this sandbox — no `huggingface.co` access |
+| `tensorboard` | (installed, version not pinned here) | `metrics.py`'s `--tensorboard` path | Real event files written and read back with `EventAccumulator` in this session — see §7 |
 
 ### 5.2 Python packages — required but NOT available/testable in this sandbox
 
@@ -107,7 +142,7 @@ These are provided by the Databricks runtime in the target environment — not s
 `pip install` separately there, but flagged here because they were never actually run against
 real data in this project's development.
 
-### 5.3 Confirmed real dependency risk: `tiktoken`'s network call
+### 5.3 Confirmed real dependency risk — and its fix — for `tiktoken`
 
 `tiktoken.get_encoding("cl100k_base")` is not purely local — on first use it fetches the BPE
 merge file from **`https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken`**
@@ -119,17 +154,25 @@ https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken
 ```
 
 This sandbox's outbound network is allowlisted to a small set of domains and blocked this one
-— which is exactly the failure mode a locked-down corporate network (proxy/firewall-restricted
-egress, as Databricks jobs often run behind) would produce. **Before `main.py` can run for
-real, confirm one of:**
-- the target environment's egress allowlist includes `openaipublic.blob.core.windows.net`, or
-- the `.tiktoken` file is pre-fetched once (from a machine with open internet) and placed in
-  tiktoken's local cache directory / `TIKTOKEN_CACHE_DIR`, or mirrored to an internally
-  reachable blob store and loaded via `tiktoken.Encoding(...)` with a custom loader instead of
-  `get_encoding`.
+— exactly the failure mode a locked-down corporate network (proxy/firewall-restricted egress,
+as Databricks jobs often run behind) would produce.
 
-This is not a hypothetical — it reproduced on the first real attempt to exercise this
-dependency in this session.
+**Fixed**: `tokenizer.py`'s `load_cl100k_encoding(local_path=...)` builds the encoding by hand
+from a local ranks file — `tiktoken.load.load_tiktoken_bpe` treats any path without `"://"` as
+a local file and never touches the network for it (confirmed from `tiktoken`'s own source and
+tested end-to-end in this sandbox with a synthetic local ranks file: loaded, built into a real
+`tiktoken.Encoding`, and successfully encoded/decoded text with zero network calls). `main.py`
+now calls this via `--tokenizer_path`; omit it to fall back to the old network-dependent
+`tiktoken.get_encoding` behavior.
+
+**What's still needed**: the actual `cl100k_base.tiktoken` ranks file itself (1.68 MB), which
+this loader validates against its known SHA-256 (`223921b7...`) before using — get it once
+from any machine with normal internet access (the official URL above, or a verified mirror —
+several exist on `huggingface.co`, e.g. in the `microsoft/Phi-3-small-8k-instruct` repo) and
+place it wherever this pipeline runs. **Note**: mirrors are themselves hosted on generic
+file-sharing platforms that may be blocked by the same kind of network policy that blocked the
+official URL — the robust path is a one-time manual transfer (download once from any
+unrestricted machine, copy the file in), not assuming any particular mirror domain is reachable.
 
 ### 5.4 Infrastructure dependencies
 
@@ -144,10 +187,12 @@ dependency in this session.
 ## 6. Functional scope (what's implemented)
 
 - **Data ETL**: exact + near-duplicate dedup, benchmark decontamination, Gopher/C4-style
-  quality-heuristic filtering (`data_quality.py`); EOS-separated packing with document-boundary
-  tracking and corrected global ordering (`packing.py`).
+  quality-heuristic filtering, and a real FineWeb-Edu-classifier-based quality filter
+  (`data_quality.py`); EOS-separated packing with document-boundary tracking, corrected global
+  ordering, and config-driven multi-source packing (`packing.py`).
 - **Data loading**: worker-safe, padding-safe streaming Parquet dataset; weighted multi-source
-  mixture with upsampling for small high-quality sources (`data.py`).
+  mixture with upsampling for small high-quality sources and CLI-overridable mixture weights
+  (`data.py`, `config.apply_weight_overrides`).
 - **Model**: dense RoPE + standard attention baseline, or DeepSeek-style Multi-head Latent
   Attention + DeepSeekMoE (aux-loss-free load balancing), selectable per run (`model.py`,
   `moe.py`).
@@ -155,29 +200,47 @@ dependency in this session.
   correct step/best-loss propagation (`train.py`, `scheduler.py`).
 - **Distributed**: ZeRO stages 0-3 via DDP / `ZeroRedundancyOptimizer` / FSDP, with
   collective-safe checkpointing (`distributed.py`).
-- **Observability**: structured JSONL metrics logging and chart rendering (`metrics.py`,
-  `plot_metrics.py`).
+- **Observability**: structured JSONL metrics logging, optional TensorBoard, and chart
+  rendering (`metrics.py`, `plot_metrics.py`).
+- **Benchmark evaluation**: MMLU (log-likelihood scoring, implemented and tested); GSM8K/
+  HumanEval documented as needing generation infra this codebase doesn't have yet
+  (`benchmark_eval.py`).
+- **Offline tokenizer loading**: bypasses `tiktoken`'s hardcoded network fetch entirely given
+  a local ranks file (`tokenizer.py`).
 
 ## 7. Testing status (see `README.md` for full detail)
 
 - **Executed in this sandbox**: model forward/backward (both archs), MoE routing/bias update,
-  data padding/mixture-sampling logic, a full single-process `train_loop` → checkpoint → resume
-  cycle, real chart generation from a real training run, and a real 2-process ZeRO/FSDP
-  distributed run (all 4 stages, including checkpoint round-trip).
+  data padding/mixture-sampling logic, `config.apply_weight_overrides` (override, partial
+  override, and error cases), the offline tokenizer loader (synthetic local ranks file, zero
+  network calls), `benchmark_eval.evaluate_mmlu` against a real `GPTModel`, the
+  `quality_filter_classifier` scoring mechanism (zero-download local BERT), a full
+  single-process `train_loop` → checkpoint → resume cycle (including `--tensorboard`), real
+  chart generation from a real training run, and a real 2-process ZeRO/FSDP distributed run
+  (all 4 stages, including checkpoint round-trip).
 - **Not executed anywhere yet**: `packing.py`/`data_quality.py` against a real Spark cluster,
-  `main.py` end-to-end against real corpus data (blocked today by §5.3's tokenizer network
-  issue), any GPU/NCCL run, any run beyond 2 processes.
+  the real `fineweb-edu-classifier` model weights (no `huggingface.co` access in this
+  sandbox), `main.py` end-to-end against real corpus data (blocked today by §5.3's tokenizer
+  file not yet being placed, and by §4.3's raw source paths not yet being filled in), any
+  GPU/NCCL run, any run beyond 2 processes.
 
 ## 8. Open risks / action items
 
-1. Confirm raw source paths for code/wikipedia/books/math and run `packing.py` against them (§4.3).
-2. Resolve `tiktoken`'s network dependency for the target environment (§5.3) — this blocks
-   `main.py` from running at all until addressed one way or another.
-3. Source eval-set texts for `decontaminate_against_eval_sets` (§4.4).
-4. Run `packing.py`/`data_quality.py` against a real Spark cluster with a small sample before
+1. Fill in `config.RAW_SOURCE_PATHS[name]["raw_path"]` for code/wikipedia/books/math once
+   downloaded from the sources documented in §4.3, then run
+   `packing.pack_all_configured_sources` against them.
+2. Get the `cl100k_base.tiktoken` ranks file (§5.3, §4.5's tokenizer entry) onto whatever
+   machine runs this pipeline and set `config.TOKENIZER_SOURCES["cl100k_base"]["local_path"]`
+   (or pass `--tokenizer_path`) — the offline-loading code is done and tested; only the
+   one-time file transfer remains.
+3. Run `packing.py`/`data_quality.py` against a real Spark cluster with a small sample before
    trusting them at full corpus scale (never executed against real Spark).
-5. Tune `DATA_SOURCES` mixture weights via small-scale ablations — current values are
-   starting points, not measured.
-6. Train (or otherwise obtain) a real quality classifier before `quality_filter_classifier`
-   can be used — it currently raises `NotImplementedError` by design.
-7. Verify ZeRO stages 2/3 (FSDP) on real GPU/NCCL hardware — only CPU/gloo verified here.
+4. Verify the real `HuggingFaceFW/fineweb-edu-classifier` weights load and score sensibly on
+   real text — only the surrounding scoring mechanism is verified here, not the actual model.
+5. If GSM8K/HumanEval scoring is wanted, the prerequisite is an autoregressive generation loop
+   (KV-cached sampling) — `benchmark_eval.py` documents this gap; MMLU doesn't need it and is
+   already implemented.
+6. Verify ZeRO stages 2/3 (FSDP) on real GPU/NCCL hardware — only CPU/gloo verified here.
+7. `DATA_SOURCES` mixture weights are still starting-point guesses — `--mixture_weights` makes
+   running ablations a CLI flag rather than a code edit, but the ablations themselves (i.e.
+   actually finding better weights) haven't been run.

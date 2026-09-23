@@ -130,11 +130,15 @@ class MixtureIterableDataset(torch.utils.data.IterableDataset):
 
 
 def build_mixture_dataset(data_root: str, split: str, ctx: int, pad_token_id: int,
-                           sources: Optional[List[str]] = None, shuffle: bool = True) -> MixtureIterableDataset:
-  """Builds a MixtureIterableDataset for `split` ('train' or 'test') from DATA_SOURCES, reading
-  each source from {data_root}/{subdir}/{split}/. `sources`, if given, restricts to a subset of
-  DATA_SOURCES names (e.g. for a quick ablation on 2-3 sources before committing to the full mix)."""
-  cfgs = [c for c in DATA_SOURCES if sources is None or c["name"] in sources]
+                           sources: Optional[List[str]] = None, shuffle: bool = True,
+                           source_configs: Optional[List[dict]] = None) -> MixtureIterableDataset:
+  """Builds a MixtureIterableDataset for `split` ('train' or 'test') from DATA_SOURCES (or
+  `source_configs`, if given -- e.g. config.apply_weight_overrides' output, for a per-run
+  mixture-weight ablation without editing config.py), reading each source from
+  {data_root}/{subdir}/{split}/. `sources`, if given, restricts to a subset of source names
+  (e.g. for a quick ablation on 2-3 sources before committing to the full mix)."""
+  base = source_configs if source_configs is not None else DATA_SOURCES
+  cfgs = [c for c in base if sources is None or c["name"] in sources]
   if not cfgs:
     raise ValueError(f"no DATA_SOURCES match sources={sources}")
 

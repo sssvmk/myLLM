@@ -95,21 +95,26 @@ def pack_source_to_shards(spark, raw_path: str, out_root: str, source_name: str,
   _pack(test_df, "test")
 
 
-# Example: pack every configured source once a raw token_content parquet exists per source,
-# each written under the shared TRANSFORMED_ROOT/{source}/{split} layout config.DATA_SOURCES
-# expects.
-#
-# import tiktoken
-# from config import DATA_SOURCES
-# RAW_SOURCE_PATHS = {
-#   "web":       "abfss://.../data/raw/.../transformed/openwebtext/openwebtext.parquet",
-#   "code":      "abfss://.../data/raw/.../transformed/code/code.parquet",
-#   "wikipedia": "abfss://.../data/raw/.../transformed/wikipedia/wikipedia.parquet",
-#   "books":     "abfss://.../data/raw/.../transformed/books/books.parquet",
-#   "math":      "abfss://.../data/raw/.../transformed/math/math.parquet",
-# }
-# TRANSFORMED_ROOT = "abfss://root@coentus6abfsprod001.dfs.core.windows.net/data/transformed"
-# _eos = tiktoken.get_encoding("cl100k_base").eot_token
-# for cfg in DATA_SOURCES:
-#   pack_source_to_shards(spark, RAW_SOURCE_PATHS[cfg["name"]], TRANSFORMED_ROOT, cfg["name"],
-#                          ctx=1024, eos_token_id=_eos)
+def pack_all_configured_sources(spark, ctx: int, out_root: str):
+  """Packs every DATA_SOURCES entry whose raw_path has been filled in under
+  config.RAW_SOURCE_PATHS (see config.py -- that's the single place raw source locations are
+  configured; this function reads it directly rather than taking a separate path dict, so
+  filling in config.py is the only step needed to make this runnable). Sources whose
+  raw_path is still empty are skipped with a clear message rather than failing the whole run,
+  since sources are typically filled in one at a time as each corpus becomes available.
+  """
+  from config import DATA_SOURCES, RAW_SOURCE_PATHS
+  from tokenizer import CL100K_EOT_TOKEN
+
+  eos_token_id = CL100K_EOT_TOKEN
+  skipped = []
+  for cfg in DATA_SOURCES:
+    raw_path = RAW_SOURCE_PATHS.get(cfg["name"], {}).get("raw_path", "")
+    if not raw_path:
+      skipped.append(cfg["name"])
+      continue
+    pack_source_to_shards(spark, raw_path, out_root, cfg["name"], ctx=ctx, eos_token_id=eos_token_id)
+
+  if skipped:
+    print(f"Skipped (no raw_path set in config.RAW_SOURCE_PATHS yet): {skipped}. "
+          f"See config.RAW_SOURCE_PATHS[name]['download_from'] for where to get each one.")

@@ -11,14 +11,14 @@ import os, random
 import torch
 import torch.cuda.amp as amp
 from torch.utils.data import DataLoader
-import tiktoken
 
-from config import PRESETS, parse_args, pad_token_id_for
+from config import PRESETS, parse_args, pad_token_id_for, TOKENIZER_SOURCES, apply_weight_overrides, DATA_SOURCES
 from model import GPTModel
 from data import ParquetTokenDataset, build_mixture_dataset
 from scheduler import CosineLRScheduler
 from train import train_loop, load_checkpoint
 from distributed import setup_distributed, wrap_model, build_optimizer_for_zero, is_main_process
+from tokenizer import load_cl100k_encoding
 
 os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
 
@@ -45,14 +45,18 @@ def drive(args):
   set_seed(args.seed)   # same seed on every rank -- model init must match before wrapping
   device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
 
-  enc = tiktoken.get_encoding("cl100k_base")
+  tokenizer_path = args.tokenizer_path or TOKENIZER_SOURCES["cl100k_base"]["local_path"] or None
+  enc = load_cl100k_encoding(tokenizer_path)   # offline if a local path is set, see tokenizer.py
   vocab_size = enc.n_vocab
   pad_token_id = pad_token_id_for(vocab_size)              # reserved id, one past the real vocab
 
   sources = [s.strip() for s in args.sources.split(',')] if args.sources else None
+  active_sources = apply_weight_overrides(DATA_SOURCES, args.mixture_weights)  # config default, or --mixture_weights override
   if args.data_root:
-    train_dataset = build_mixture_dataset(args.data_root, 'train', args.ctx, pad_token_id, sources=sources)
-    test_dataset = build_mixture_dataset(args.data_root, 'test', args.ctx, pad_token_id, sources=sources, shuffle=False)
+    train_dataset = build_mixture_dataset(args.data_root, 'train', args.ctx, pad_token_id,
+                                           sources=sources, source_configs=active_sources)
+    test_dataset = build_mixture_dataset(args.data_root, 'test', args.ctx, pad_token_id,
+                                          sources=sources, source_configs=active_sources, shuffle=False)
   elif args.train and args.test:
     train_dataset = ParquetTokenDataset(args.train, args.ctx, pad_token_id)
     test_dataset = ParquetTokenDataset(args.test, args.ctx, pad_token_id)
