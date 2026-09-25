@@ -1,0 +1,3 @@
+Solve the following problem. Show your working step by step, then write the final numeric answer on its own last line in the form "#### <number>".
+
+{question}

@@ -1,0 +1,18 @@
+Rate the response to the instruction on a scale from 1 to 10 using this rubric:
+
+- Helpfulness: does it do what was asked, completely?
+- Accuracy: is everything it states correct?
+- Clarity: is it well organized and easy to follow?
+- Harmlessness: does it avoid unsafe or inappropriate content?
+
+Length is not a merit: a longer answer is not better unless the extra content is needed.
+1 = unusable, 5 = acceptable with clear problems, 10 = excellent on every criterion.
+
+[Instruction]
+{instruction}
+
+[Response]
+{response}
+
+Explain briefly, then end with exactly one line of the form:
+SCORE: <n>

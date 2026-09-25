@@ -1,0 +1,1 @@
+Think through the problem step by step inside <think> and </think>. After </think>, give the full solution in one fenced Python code block.

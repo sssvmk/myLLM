@@ -1,0 +1,424 @@
+# Tiny CPU configuration for tests (CF-6, §17). Paths come from environment variables that the
+# test fixtures set: PF_TINY_ROOT (scratch dir with synthetic data) and PF_FOUNDATION_LLM.
+run:
+  name: tiny
+  seed: 1234
+  local_work_dir: ${oc.env:PF_TINY_ROOT}/work
+  output_root_uri: file://${oc.env:PF_TINY_ROOT}/runs
+  device: cpu
+  precision: fp32
+
+storage:
+  upload_retries: 2
+  protocols: {}
+
+foundation_llm:
+  code_path: ${oc.env:PF_FOUNDATION_LLM}
+
+base_model:
+  checkpoint_uri: ${oc.env:PF_TINY_ROOT}/base/latest_check.pt
+  architecture: &tiny_arch
+    arch: deepseek
+    d_model: 32
+    n_layer: 2
+    n_heads: 4
+    d_ff: 64
+    ctx: 64
+    rope_theta: 10000.0
+    d_latent: 64
+    d_rope: 8
+    n_routed_experts: 4
+    n_shared_experts: 1
+    moe_top_k: 2
+    vocab_rows: 100278
+
+tokenizer:
+  ranks_file_uri: ${oc.env:PF_TINY_ROOT}/tokenizer/tiny.tiktoken
+  ranks_sha256: ${oc.env:PF_TINY_RANKS_SHA}
+  eot_token_id: 100257
+  pad_token_id: 100277
+  chat_special_tokens:
+    im_start: {text: "<|im_start|>", id: 100264}
+    im_end: {text: "<|im_end|>", id: 100265}
+    think_open: {text: "<think>", id: 100266}
+    think_close: {text: "</think>", id: 100267}
+
+chat_template:
+  turn_start: "<|im_start|>{role}\n"
+  turn_end: "<|im_end|>\n"
+  generation_prompt: "<|im_start|>assistant\n"
+  reasoning_open: "<think>"
+  reasoning_close: "</think>"
+
+datasets:
+  tiny_text:
+    uri: ${oc.env:PF_TINY_ROOT}/data/text
+    files: {train: "train-*.jsonl"}
+    format: jsonl
+    kind: text
+    adapter: text_field
+    field_map: {text: text}
+    license: synthetic
+    third_party_generated: false
+    max_samples: null
+  tiny_packed:
+    uri: ${oc.env:PF_TINY_ROOT}/data/packed
+    files: {train: "train/shard_id=*/*.parquet", test: "test/shard_id=*/*.parquet"}
+    format: packed_tokens
+    kind: packed_tokens
+    adapter: packed_tokens
+    field_map: {tokens: tokens, doc_start: doc_start}
+    license: synthetic
+    third_party_generated: false
+    max_samples: null
+  tiny_chat:
+    uri: ${oc.env:PF_TINY_ROOT}/data/chat
+    files: {train: "train-*.jsonl"}
+    format: jsonl
+    kind: conversations
+    adapter: messages_list
+    field_map: {messages: messages, role_key: role, content_key: content}
+    license: synthetic
+    third_party_generated: false
+    max_samples: null
+  tiny_pref:
+    uri: ${oc.env:PF_TINY_ROOT}/data/pref
+    files: {train: "train-*.jsonl"}
+    format: jsonl
+    kind: preference
+    adapter: prompt_chosen_rejected_text
+    field_map: {prompt: prompt, chosen: chosen, rejected: rejected}
+    license: synthetic
+    third_party_generated: false
+    max_samples: null
+  tiny_prompts:
+    uri: ${oc.env:PF_TINY_ROOT}/data/prompts
+    files: {train: "train-*.jsonl"}
+    format: jsonl
+    kind: prompts
+    adapter: prompt_text
+    field_map: {prompt: prompt}
+    license: synthetic
+    third_party_generated: false
+    max_samples: null
+  tiny_math:
+    uri: ${oc.env:PF_TINY_ROOT}/data/math
+    files: {train: "train-*.jsonl"}
+    format: jsonl
+    kind: rl_math
+    adapter: question_answer
+    field_map: {question: question, answer: answer}
+    answer_extraction: regex
+    answer_regex: "####\\s*(-?[\\d,\\.]+)"
+    license: synthetic
+    third_party_generated: false
+    max_samples: null
+  tiny_code:
+    uri: ${oc.env:PF_TINY_ROOT}/data/code
+    files: {train: "train-*.jsonl"}
+    format: jsonl
+    kind: rl_code
+    adapter: code_tests
+    field_map: {prompt: text, tests: test_list, entry_point: null}
+    prompt_include_tests: 1
+    license: synthetic
+    third_party_generated: false
+    max_samples: null
+  eval_mmlu:
+    uri: ${oc.env:PF_TINY_ROOT}/data/eval
+    files: {test: "mmlu.jsonl"}
+    format: jsonl
+    kind: eval_mmlu
+    adapter: eval_mmlu
+    field_map: {question: question, choices: choices, answer: answer}
+    license: synthetic
+    third_party_generated: false
+    max_samples: null
+  eval_gsm8k:
+    uri: ${oc.env:PF_TINY_ROOT}/data/eval
+    files: {test: "gsm8k.jsonl", fewshot: "gsm8k.jsonl"}
+    format: jsonl
+    kind: eval_gsm8k
+    adapter: eval_gsm8k
+    field_map: {question: question, answer: answer}
+    license: synthetic
+    third_party_generated: false
+    max_samples: null
+
+prepared_data:
+  root_uri: file://${oc.env:PF_TINY_ROOT}/prepared
+  num_workers: 1
+  shard_rows: 16
+  holdout_fraction: 0.2
+  max_drop_fraction: 0.5
+  decontamination:
+    ngram: 5
+    overlap_threshold: 0.5
+    against: [eval_mmlu, eval_gsm8k]
+    splits: [test]
+
+judge:
+  base_url: http://127.0.0.1:8765/v1
+  model: stub-judge
+  api_key_env: PF_TINY_JUDGE_KEY
+  temperature: 0.0
+  max_tokens: 16
+  timeout_s: 5
+  max_retries: 1
+  max_concurrency: 2
+  prompts:
+    pairwise_uri: ${oc.env:PF_PROMPTS_DIR}/judge_pairwise.txt
+    refusal_uri: ${oc.env:PF_PROMPTS_DIR}/judge_refusal.txt
+    scoring_uri: ${oc.env:PF_PROMPTS_DIR}/judge_scoring.txt
+  parse:
+    pairwise_regex: "VERDICT:\\s*(A|B|TIE)"
+    refusal_regex: "VERDICT:\\s*(compliance|partial_refusal|refusal)"
+    score_regex: "SCORE:\\s*(10|[1-9])"
+
+teachers:
+  offpolicy:
+    base_url: http://127.0.0.1:8765/v1
+    model: stub-teacher
+    api_key_env: PF_TINY_TEACHER_KEY
+    temperature: 0.7
+    top_p: 0.95
+    max_tokens: 32
+    timeout_s: 5
+    max_retries: 1
+    max_concurrency: 2
+  onpolicy:
+    checkpoint_uri: ${oc.env:PF_TINY_ROOT}/base/latest_check.pt
+    architecture: *tiny_arch
+    tokenizer_matches: true
+
+code_execution:
+  backend: subprocess
+  python_executable: python3
+  timeout_s: 5
+  memory_mb: 512
+  max_open_files: 64
+  max_processes: 4096
+  max_parallel: 2
+  env_allowlist: [PATH, LANG]
+  isolated_host_confirmed: true
+
+generation:
+  max_new_tokens: 8
+  temperature: 0.0
+  top_k: 0
+  top_p: 1.0
+  repetition_penalty: 1.0
+  seed: 1234
+  batch_size: 4
+  use_kv_cache: true
+  overflow: truncate_left
+
+stages:
+  midtrain:
+    enabled: true
+    init_from: base
+    output_uri: ${run.output_root_uri}/${run.name}/midtrain
+    use_doc_mask: true
+    data:
+      sources:
+        - {dataset: tiny_text, weight: 0.7}
+        - {dataset: tiny_packed, weight: 0.3}
+      token_budget: 2000
+      retention_eval_dataset: tiny_packed
+    optim: {lr: 1.0e-3, lr_min: 0.0, betas: [0.9, 0.95], eps: 1.0e-8, weight_decay: 0.1, grad_clip: 1.0}
+    schedule: {type: wsd, warmup_fraction: 0.2, stable_fraction: 0.4, decay_fraction: 0.4, decay_shape: linear}
+    batch: {micro_batch_size: 2, grad_accum: 2}
+    distributed: {zero_stage: 0, find_unused_parameters: true}
+    moe: {update_routing_bias: true, bias_update_rate: 1.0e-3, aux_loss_weight: 0.01}
+    dropout: 0.0
+    checkpoint_every_steps: 2
+    keep_last_checkpoints: 2
+    eval_every_steps: 2
+  midtrain_long:
+    enabled: false
+    init_from: previous
+    output_uri: ${run.output_root_uri}/${run.name}/midtrain_long
+    architecture_override: {ctx: 128, rope_theta: 50000.0}
+    use_doc_mask: true
+    data:
+      sources:
+        - {dataset: tiny_packed, weight: 1.0}
+      token_budget: 2000
+      retention_eval_dataset: tiny_packed
+    optim: {lr: 1.0e-3, lr_min: 0.0, betas: [0.9, 0.95], eps: 1.0e-8, weight_decay: 0.1, grad_clip: 1.0}
+    schedule: {type: wsd, warmup_fraction: 0.2, stable_fraction: 0.0, decay_fraction: 0.8, decay_shape: cosine}
+    batch: {micro_batch_size: 1, grad_accum: 2}
+    distributed: {zero_stage: 0, find_unused_parameters: true}
+    moe: {update_routing_bias: true, bias_update_rate: 1.0e-3, aux_loss_weight: 0.01}
+    dropout: 0.0
+    checkpoint_every_steps: 2
+    keep_last_checkpoints: 2
+    eval_every_steps: 2
+  sft:
+    enabled: true
+    init_from: previous
+    output_uri: ${run.output_root_uri}/${run.name}/sft
+    use_doc_mask: true
+    data:
+      sources:
+        - {dataset: tiny_chat, weight: 1.0}
+      epochs: 1
+    optim: {lr: 1.0e-3, lr_min: 0.0, betas: [0.9, 0.95], eps: 1.0e-8, weight_decay: 0.0, grad_clip: 1.0}
+    schedule: {type: linear, warmup_fraction: 0.1}
+    batch: {micro_batch_size: 2, grad_accum: 1}
+    distributed: {zero_stage: 0, find_unused_parameters: true}
+    moe: {update_routing_bias: true, bias_update_rate: 1.0e-4, aux_loss_weight: 0.0}
+    dropout: 0.0
+    checkpoint_every_steps: 2
+    keep_last_checkpoints: 2
+    eval_every_steps: 2
+  preference:
+    enabled: true
+    init_from: previous
+    output_uri: ${run.output_root_uri}/${run.name}/preference
+    objective: dpo
+    beta: 0.1
+    simpo_gamma: 0.5
+    max_total_tokens: 60
+    data:
+      sources:
+        - {dataset: tiny_pref, weight: 1.0}
+      epochs: 1
+    on_policy:
+      enabled: false
+      prompts_dataset: tiny_prompts
+      max_prompts: 4
+      samples_per_prompt: 2
+      weight: 0.3
+      generation: {max_new_tokens: 8, temperature: 0.8, top_k: 0, top_p: 0.95, repetition_penalty: 1.0, seed: 1234, batch_size: 4, use_kv_cache: true, overflow: truncate_left}
+    optim: {lr: 1.0e-4, lr_min: 0.0, betas: [0.9, 0.95], eps: 1.0e-8, weight_decay: 0.0, grad_clip: 1.0}
+    schedule: {type: linear, warmup_fraction: 0.1}
+    batch: {micro_batch_size: 2, grad_accum: 1}
+    distributed: {zero_stage: 0, find_unused_parameters: true}
+    moe: {update_routing_bias: false, bias_update_rate: 0.0, aux_loss_weight: 0.0}
+    dropout: 0.0
+    checkpoint_every_steps: 2
+    keep_last_checkpoints: 2
+    eval_every_steps: 2
+  rlvr:
+    enabled: true
+    init_from: previous
+    output_uri: ${run.output_root_uri}/${run.name}/rlvr
+    data:
+      sources:
+        - {dataset: tiny_math, weight: 0.5}
+        - {dataset: tiny_code, weight: 0.5}
+    system_prompts:
+      rl_math: ${oc.env:PF_PROMPTS_DIR}/rl_math_system.txt
+      rl_code: ${oc.env:PF_PROMPTS_DIR}/rl_code_system.txt
+    entry_gate: {sample_prompts: 2, k: 2, min_pass_at_k: 0.0, on_failure: skip}
+    prompts_per_step: 2
+    group_size: 2
+    updates_per_step: 1
+    total_steps: 3
+    adv_eps: 1.0e-6
+    advantage_std_normalization: true
+    clip: {eps_low: 3.0e-4, eps_high: 4.0e-4}
+    kl_coef: 0.0
+    dapo:
+      dynamic_sampling: false
+      max_resample_rounds: 1
+      overlong: {mode: soft_penalty, buffer_tokens: 4, penalty_factor: 1.0}
+    rewards:
+      correctness_weight: 1.0
+      format_weight: 0.1
+      math: {final_answer_regex: "(?i)final answer\\s*[:：]\\s*(.+)"}
+    generation: {max_new_tokens: 8, temperature: 1.0, top_k: 0, top_p: 1.0, repetition_penalty: 1.0, seed: 1234, batch_size: 4, use_kv_cache: true, overflow: truncate_left}
+    entropy_floor: {value: 0.0, patience_steps: 5}
+    routing_metric_sample_tokens: 16
+    validation_prompts: 2
+    optim: {lr: 1.0e-4, lr_min: 1.0e-4, betas: [0.9, 0.95], eps: 1.0e-8, weight_decay: 0.0, grad_clip: 1.0}
+    schedule: {type: constant, warmup_fraction: 0.0}
+    batch: {micro_batch_size: 2, grad_accum: 1}
+    distributed: {zero_stage: 0, find_unused_parameters: true}
+    moe: {update_routing_bias: false, bias_update_rate: 0.0, aux_loss_weight: 0.0}
+    dropout: 0.0
+    checkpoint_every_steps: 2
+    keep_last_checkpoints: 2
+    eval_every_steps: 2
+  distill:
+    enabled: true
+    offpolicy:
+      enabled: true
+      init_from: previous
+      output_uri: ${run.output_root_uri}/${run.name}/distill_offpolicy
+      use_doc_mask: true
+      prompts_datasets: [tiny_math, tiny_prompts]
+      max_prompts: 4
+      samples_per_prompt: 1
+      max_response_tokens: 32
+      data:
+        sources:
+          - {dataset: teacher_traces, weight: 0.8}
+          - {dataset: tiny_chat, weight: 0.2}
+        epochs: 1
+      optim: {lr: 1.0e-4, lr_min: 0.0, betas: [0.9, 0.95], eps: 1.0e-8, weight_decay: 0.0, grad_clip: 1.0}
+      schedule: {type: linear, warmup_fraction: 0.1}
+      batch: {micro_batch_size: 2, grad_accum: 1}
+      distributed: {zero_stage: 0, find_unused_parameters: true}
+      moe: {update_routing_bias: true, bias_update_rate: 1.0e-4, aux_loss_weight: 0.0}
+      dropout: 0.0
+      checkpoint_every_steps: 2
+      keep_last_checkpoints: 2
+      eval_every_steps: 2
+    onpolicy:
+      enabled: true
+      init_from: previous
+      output_uri: ${run.output_root_uri}/${run.name}/distill_onpolicy
+      data:
+        sources:
+          - {dataset: tiny_math, weight: 0.5}
+          - {dataset: tiny_prompts, weight: 0.5}
+      prompts_per_step: 2
+      total_steps: 3
+      validation_prompts: 2
+      generation: {max_new_tokens: 8, temperature: 1.0, top_k: 0, top_p: 1.0, repetition_penalty: 1.0, seed: 1234, batch_size: 4, use_kv_cache: true, overflow: truncate_left}
+      optim: {lr: 1.0e-4, lr_min: 1.0e-4, betas: [0.9, 0.95], eps: 1.0e-8, weight_decay: 0.0, grad_clip: 1.0}
+      schedule: {type: constant, warmup_fraction: 0.0}
+      batch: {micro_batch_size: 2, grad_accum: 1}
+      distributed: {zero_stage: 0, find_unused_parameters: true}
+      moe: {update_routing_bias: false, bias_update_rate: 0.0, aux_loss_weight: 0.0}
+      dropout: 0.0
+      checkpoint_every_steps: 2
+      keep_last_checkpoints: 2
+      eval_every_steps: 2
+
+eval:
+  benchmarks:
+    mmlu: {dataset: eval_mmlu, max_examples: 4}
+    gsm8k: {dataset: eval_gsm8k, max_examples: 2, n_shot: 1, answer_regex: "####\\s*(-?[\\d,\\.]+)", base_prompt_uri: "${oc.env:PF_PROMPTS_DIR}/gsm8k_base_fewshot.txt", chat_prompt_uri: "${oc.env:PF_PROMPTS_DIR}/gsm8k_chat.txt"}
+    math500: null
+    humaneval: null
+    ifeval: null
+    alpaca_eval_lc: null
+    safety: null
+    calibration: {bins: 5}
+    length: null
+    adherence: {n_prompts: 2}
+
+gates:
+  on_failure: continue
+  min_improvement: 0.0
+  lower_is_better: [mmlu_ece]
+  tolerances: {mmlu_acc: 1.0, gsm8k_acc: 1.0, mmlu_ece: 1.0}
+  require_improvement: {midtrain: [], midtrain_long: [], sft: [], preference: [], rlvr: [], distill_offpolicy: [], distill_onpolicy: []}
+  thresholds: {length_ratio_max: 100.0, template_adherence_min: 0.0, safety_unsafe_refusal_min: 0.0, safety_safe_compliance_min: 0.0}
+
+export:
+  output_uri: file://${oc.env:PF_TINY_ROOT}/export
+  dtype: fp32
+
+launcher:
+  nnodes: 1
+  nproc_per_node: 1
+  extra_torchrun_args: []
+
+logging:
+  tensorboard: true
+  log_every_steps: 1
+  moe_usage_every_steps: 2

@@ -1,0 +1,3 @@
+Complete the following Python function. Reply with the complete function, including its signature and any imports it needs, in a single fenced Python code block.
+
+{prompt}

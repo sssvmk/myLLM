@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "keystone"
+version = "0.1.0"
+description = "Keystone: post-training pipeline (mid-training, SFT, preference, RLVR, distillation) for foundation_llm checkpoints"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "tiktoken",
+    "pyarrow",
+    "numpy",
+    "fsspec",
+    "adlfs",
+    "s3fs",
+    "gcsfs",
+    "huggingface_hub",
+    "omegaconf",
+    "pydantic>=2",
+    "openai",
+    "math-verify",
+    "lm-eval",
+    "safetensors",
+    "tensorboard",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+pf = "src.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

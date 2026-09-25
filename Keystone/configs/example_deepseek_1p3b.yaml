@@ -1,0 +1,547 @@
+# PRD Appendix A example (see docs/implementation_notes.md for the two added keys).
+run:
+  name: pf-deepseek-1p3b
+  seed: 1337
+  local_work_dir: /local_disk0/keystone
+  output_root_uri: abfss://<container>@<storage-account>.dfs.core.windows.net/keystone/runs
+  device: auto                # auto | cuda | cpu (DV-1)
+  precision: bf16             # bf16 | fp16 | fp32 (DV-5)
+
+storage:
+  upload_retries: 3
+  protocols:
+    abfss:
+      account_name: ${oc.env:PF_AZURE_ACCOUNT}
+      account_key: ${oc.env:PF_AZURE_KEY}
+    hf:
+      token: ${oc.env:HF_TOKEN}
+
+foundation_llm:
+  code_path: /Workspace/Repos/<user>/foundation_llm
+
+base_model:
+  checkpoint_uri: abfss://<container>@<storage-account>.dfs.core.windows.net/models/foundation/latest/latest_check.pt
+  architecture:
+    arch: deepseek
+    d_model: 2048
+    n_layer: 24
+    n_heads: 16
+    d_ff: 8192
+    ctx: 1024
+    rope_theta: 10000.0
+    d_latent: 256             # foundation_llm's "0 = d_model // 8" resolved explicitly
+    d_rope: 32
+    n_routed_experts: 8
+    n_shared_experts: 1
+    moe_top_k: 2
+    vocab_rows: 100278
+
+tokenizer:
+  ranks_file_uri: abfss://<container>@<storage-account>.dfs.core.windows.net/tokenizer/cl100k_base.tiktoken
+  ranks_sha256: 223921b76ee99bde995b7ff738513eef100fb51d18c93597a113bcffe865b2a7
+  eot_token_id: 100257
+  pad_token_id: 100277
+  chat_special_tokens:
+    im_start: {text: "<|im_start|>", id: 100264}
+    im_end: {text: "<|im_end|>", id: 100265}
+    think_open: {text: "<think>", id: 100266}
+    think_close: {text: "</think>", id: 100267}
+
+chat_template:
+  turn_start: "<|im_start|>{role}\n"
+  turn_end: "<|im_end|>\n"
+  generation_prompt: "<|im_start|>assistant\n"
+  reasoning_open: "<think>"
+  reasoning_close: "</think>"
+
+datasets:
+  # --- mid-training ---
+  fineweb_edu:
+    uri: hf://datasets/HuggingFaceFW/fineweb-edu
+    files: {train: "sample/10BT/*.parquet"}
+    format: parquet
+    kind: text
+    adapter: text_field
+    field_map: {text: text}
+    license: ODC-By-1.0
+    third_party_generated: false
+    max_samples: null
+  open_web_math:
+    uri: hf://datasets/open-web-math/open-web-math
+    files: {train: "data/*.parquet"}
+    format: parquet
+    kind: text
+    adapter: text_field
+    field_map: {text: text}
+    license: ODC-By-1.0
+    third_party_generated: false
+    max_samples: null
+  pretrain_retention:
+    uri: abfss://<container>@<storage-account>.dfs.core.windows.net/transformed/openwebtext
+    files: {train: "train/shard_id=*/*.parquet", test: "test/shard_id=*/*.parquet"}
+    format: packed_tokens
+    kind: packed_tokens
+    adapter: packed_tokens
+    field_map: {tokens: tokens, doc_start: doc_start}
+    license: see foundation_llm raw_source_paths
+    third_party_generated: false
+    max_samples: null
+  # --- SFT ---
+  tulu3_sft:
+    uri: hf://datasets/allenai/tulu-3-sft-olmo-2-mixture-0225
+    files: {train: "data/train-*.parquet"}
+    format: parquet
+    kind: conversations
+    adapter: messages_list
+    field_map: {messages: messages, role_key: role, content_key: content}
+    license: ODC-BY-1.0
+    third_party_generated: true
+    max_samples: null
+  # --- preference ---
+  olmo2_1b_pref:
+    uri: hf://datasets/allenai/olmo-2-0425-1b-preference-mix
+    files: {train: "data/train-*.parquet"}
+    format: parquet
+    kind: preference
+    adapter: chosen_rejected_messages
+    field_map: {chosen: chosen, rejected: rejected, role_key: role, content_key: content}
+    license: ODC-BY-1.0
+    third_party_generated: true
+    max_samples: null
+  ultrafeedback_prompts:
+    uri: hf://datasets/HuggingFaceH4/ultrafeedback_binarized
+    files: {train: "data/train_prefs-*.parquet"}
+    format: parquet
+    kind: prompts
+    adapter: prompt_text
+    field_map: {prompt: prompt}
+    license: MIT
+    third_party_generated: true
+    max_samples: 20000
+  # --- RLVR / distillation prompts ---
+  gsm8k_train:
+    uri: hf://datasets/openai/gsm8k
+    files: {train: "main/train-*.parquet"}
+    format: parquet
+    kind: rl_math
+    adapter: question_answer
+    field_map: {question: question, answer: answer}
+    answer_extraction: regex
+    answer_regex: "####\\s*(-?[\\d,\\.]+)"
+    license: MIT
+    third_party_generated: false
+    max_samples: null
+  numinamath:
+    uri: hf://datasets/AI-MO/NuminaMath-CoT
+    files: {train: "data/train-*.parquet"}
+    format: parquet
+    kind: rl_math
+    adapter: question_answer
+    field_map: {question: problem, answer: solution}
+    answer_extraction: boxed
+    answer_regex: null
+    license: Apache-2.0
+    third_party_generated: true
+    max_samples: 50000
+  mbpp_train:
+    uri: hf://datasets/google-research-datasets/mbpp
+    files: {train: "full/train-*.parquet"}
+    format: parquet
+    kind: rl_code
+    adapter: code_tests
+    field_map: {prompt: text, tests: test_list, entry_point: null}
+    prompt_include_tests: 1
+    license: CC-BY-4.0
+    third_party_generated: false
+    max_samples: null
+  # --- evaluation ---
+  mmlu:
+    uri: hf://datasets/cais/mmlu
+    files: {test: "all/test-*.parquet"}
+    format: parquet
+    kind: eval_mmlu
+    adapter: eval_mmlu
+    field_map: {question: question, choices: choices, answer: answer}
+    license: MIT
+    third_party_generated: false
+    max_samples: null
+  gsm8k_test:
+    uri: hf://datasets/openai/gsm8k
+    files: {test: "main/test-*.parquet", fewshot: "main/train-*.parquet"}
+    format: parquet
+    kind: eval_gsm8k
+    adapter: eval_gsm8k
+    field_map: {question: question, answer: answer}
+    license: MIT
+    third_party_generated: false
+    max_samples: null
+  math500:
+    uri: hf://datasets/HuggingFaceH4/MATH-500
+    files: {test: "test.jsonl"}
+    format: jsonl
+    kind: eval_math
+    adapter: eval_math
+    field_map: {problem: problem, answer: answer}
+    license: MIT
+    third_party_generated: false
+    max_samples: null
+  humaneval:
+    uri: hf://datasets/openai/openai_humaneval
+    files: {test: "openai_humaneval/test-*.parquet"}
+    format: parquet
+    kind: eval_humaneval
+    adapter: eval_humaneval
+    field_map: {prompt: prompt, test: test, entry_point: entry_point}
+    license: MIT
+    third_party_generated: false
+    max_samples: null
+  ifeval:
+    uri: hf://datasets/google/IFEval
+    files: {test: "ifeval_input_data.jsonl"}
+    format: jsonl
+    kind: eval_ifeval
+    adapter: eval_ifeval
+    field_map: {key: key, prompt: prompt, instruction_id_list: instruction_id_list, kwargs: kwargs}
+    license: Apache-2.0
+    third_party_generated: false
+    max_samples: null
+  alpaca_eval:
+    uri: hf://datasets/tatsu-lab/alpaca_eval
+    files: {test: "alpaca_eval.json"}
+    format: json
+    kind: eval_alpaca
+    adapter: eval_alpaca
+    field_map: {instruction: instruction, reference_output: output}
+    license: CC-BY-NC-4.0
+    third_party_generated: true
+    max_samples: null
+  xstest:
+    uri: hf://datasets/walledai/XSTest
+    files: {test: "data/test-*.parquet"}
+    format: parquet
+    kind: eval_safety
+    adapter: eval_safety
+    field_map: {prompt: prompt, label: label}
+    safe_label: safe
+    license: CC-BY-4.0
+    third_party_generated: false
+    max_samples: null
+
+prepared_data:
+  root_uri: abfss://<container>@<storage-account>.dfs.core.windows.net/keystone/prepared
+  num_workers: 16
+  shard_rows: 20000
+  holdout_fraction: 0.01
+  max_drop_fraction: 0.2
+  decontamination:
+    ngram: 13
+    overlap_threshold: 0.8
+    against: [mmlu, gsm8k_test, math500, humaneval, ifeval, alpaca_eval, xstest]
+    splits: [test]
+
+judge:
+  base_url: ${oc.env:PF_JUDGE_BASE_URL}
+  model: ${oc.env:PF_JUDGE_MODEL}
+  api_key_env: PF_JUDGE_API_KEY
+  temperature: 0.0
+  max_tokens: 512
+  timeout_s: 120
+  max_retries: 3
+  max_concurrency: 8
+  prompts:
+    pairwise_uri: prompts/judge_pairwise.txt
+    refusal_uri: prompts/judge_refusal.txt
+    scoring_uri: prompts/judge_scoring.txt
+  parse:
+    pairwise_regex: "VERDICT:\\s*(A|B|TIE)"
+    refusal_regex: "VERDICT:\\s*(compliance|partial_refusal|refusal)"
+    score_regex: "SCORE:\\s*(10|[1-9])"
+
+teachers:
+  offpolicy:
+    base_url: ${oc.env:PF_TEACHER_BASE_URL}
+    model: ${oc.env:PF_TEACHER_MODEL}
+    api_key_env: PF_TEACHER_API_KEY
+    temperature: 0.7
+    top_p: 0.95
+    max_tokens: 2048
+    timeout_s: 300
+    max_retries: 3
+    max_concurrency: 8
+  onpolicy:
+    checkpoint_uri: abfss://<container>@<storage-account>.dfs.core.windows.net/keystone/runs/pf-deepseek-6p7b/rlvr/final/model.pt
+    architecture:
+      arch: deepseek
+      d_model: 4096
+      n_layer: 32
+      n_heads: 32
+      d_ff: 16384
+      ctx: 1024
+      rope_theta: 10000.0
+      d_latent: 512
+      d_rope: 32
+      n_routed_experts: 8
+      n_shared_experts: 1
+      moe_top_k: 2
+      vocab_rows: 100278
+    tokenizer_matches: false   # checked from the teacher's lineage.json; set true only for a base-format teacher
+
+code_execution:
+  backend: subprocess
+  python_executable: python3
+  timeout_s: 10
+  memory_mb: 1024
+  max_open_files: 64          # SB-1 limit; key added (not in PRD Appendix A)
+  max_processes: 16           # SB-1 limit; key added (not in PRD Appendix A)
+  max_parallel: 8
+  env_allowlist: [PATH, LANG]
+  isolated_host_confirmed: true
+
+generation:
+  max_new_tokens: 1024
+  temperature: 0.0
+  top_k: 0
+  top_p: 1.0
+  repetition_penalty: 1.0
+  seed: 1337
+  batch_size: 16
+  use_kv_cache: true
+  overflow: truncate_left
+
+stages:
+  midtrain:
+    enabled: true
+    init_from: base
+    output_uri: ${run.output_root_uri}/${run.name}/midtrain
+    use_doc_mask: true
+    data:
+      sources:
+        - {dataset: fineweb_edu, weight: 0.55}
+        - {dataset: open_web_math, weight: 0.25}
+        - {dataset: pretrain_retention, weight: 0.20}
+      token_budget: 2.0e9
+      retention_eval_dataset: pretrain_retention
+    optim: {lr: 1.0e-4, lr_min: 0.0, betas: [0.9, 0.95], eps: 1.0e-8, weight_decay: 0.1, grad_clip: 1.0}
+    schedule: {type: wsd, warmup_fraction: 0.02, stable_fraction: 0.0, decay_fraction: 0.98, decay_shape: linear}
+    batch: {micro_batch_size: 8, grad_accum: 32}
+    distributed: {zero_stage: 2, find_unused_parameters: true}
+    moe: {update_routing_bias: true, bias_update_rate: 1.0e-3, aux_loss_weight: 0.01}
+    dropout: 0.0
+    checkpoint_every_steps: 500
+    keep_last_checkpoints: 3
+    eval_every_steps: 500
+
+  midtrain_long:
+    enabled: false
+    init_from: previous
+    output_uri: ${run.output_root_uri}/${run.name}/midtrain_long
+    architecture_override: {ctx: 4096, rope_theta: 500000.0}
+    use_doc_mask: true
+    data:
+      sources:
+        - {dataset: fineweb_edu, weight: 0.7}
+        - {dataset: pretrain_retention, weight: 0.3}
+      token_budget: 5.0e8
+      retention_eval_dataset: pretrain_retention
+    optim: {lr: 5.0e-5, lr_min: 0.0, betas: [0.9, 0.95], eps: 1.0e-8, weight_decay: 0.1, grad_clip: 1.0}
+    schedule: {type: wsd, warmup_fraction: 0.05, stable_fraction: 0.0, decay_fraction: 0.95, decay_shape: linear}
+    batch: {micro_batch_size: 2, grad_accum: 32}
+    distributed: {zero_stage: 3, find_unused_parameters: true}
+    moe: {update_routing_bias: true, bias_update_rate: 1.0e-3, aux_loss_weight: 0.01}
+    dropout: 0.0
+    checkpoint_every_steps: 250
+    keep_last_checkpoints: 3
+    eval_every_steps: 250
+
+  sft:
+    enabled: true
+    init_from: previous
+    output_uri: ${run.output_root_uri}/${run.name}/sft
+    use_doc_mask: true
+    data:
+      sources:
+        - {dataset: tulu3_sft, weight: 1.0}
+      epochs: 2
+    optim: {lr: 1.0e-5, lr_min: 0.0, betas: [0.9, 0.95], eps: 1.0e-8, weight_decay: 0.0, grad_clip: 1.0}
+    schedule: {type: linear, warmup_fraction: 0.03}
+    batch: {micro_batch_size: 8, grad_accum: 16}
+    distributed: {zero_stage: 2, find_unused_parameters: true}
+    moe: {update_routing_bias: true, bias_update_rate: 1.0e-4, aux_loss_weight: 0.0}
+    dropout: 0.0
+    checkpoint_every_steps: 500
+    keep_last_checkpoints: 3
+    eval_every_steps: 500
+
+  preference:
+    enabled: true
+    init_from: previous
+    output_uri: ${run.output_root_uri}/${run.name}/preference
+    objective: dpo                    # dpo | simpo
+    beta: 0.1
+    simpo_gamma: 0.5
+    max_total_tokens: 1024
+    data:
+      sources:
+        - {dataset: olmo2_1b_pref, weight: 0.7}
+      epochs: 1
+    on_policy:
+      enabled: true
+      prompts_dataset: ultrafeedback_prompts
+      max_prompts: 20000
+      samples_per_prompt: 4
+      weight: 0.3
+      generation: {max_new_tokens: 768, temperature: 0.8, top_k: 0, top_p: 0.95, repetition_penalty: 1.0, seed: 1337, batch_size: 32, use_kv_cache: true, overflow: truncate_left}
+    optim: {lr: 5.0e-7, lr_min: 0.0, betas: [0.9, 0.95], eps: 1.0e-8, weight_decay: 0.0, grad_clip: 1.0}
+    schedule: {type: linear, warmup_fraction: 0.1}
+    batch: {micro_batch_size: 4, grad_accum: 32}
+    distributed: {zero_stage: 2, find_unused_parameters: true}
+    moe: {update_routing_bias: false, bias_update_rate: 0.0, aux_loss_weight: 0.0}
+    dropout: 0.0
+    checkpoint_every_steps: 200
+    keep_last_checkpoints: 3
+    eval_every_steps: 200
+
+  rlvr:
+    enabled: true
+    init_from: previous
+    output_uri: ${run.output_root_uri}/${run.name}/rlvr
+    data:
+      sources:
+        - {dataset: gsm8k_train, weight: 0.4}
+        - {dataset: numinamath, weight: 0.4}
+        - {dataset: mbpp_train, weight: 0.2}
+    system_prompts:
+      rl_math: prompts/rl_math_system.txt
+      rl_code: prompts/rl_code_system.txt
+    entry_gate: {sample_prompts: 256, k: 8, min_pass_at_k: 0.2, on_failure: skip}
+    prompts_per_step: 64
+    group_size: 8
+    updates_per_step: 4
+    total_steps: 500
+    adv_eps: 1.0e-6
+    advantage_std_normalization: true
+    clip: {eps_low: 3.0e-4, eps_high: 4.0e-4}
+    kl_coef: 0.0
+    dapo:
+      dynamic_sampling: true
+      max_resample_rounds: 3
+      overlong: {mode: soft_penalty, buffer_tokens: 256, penalty_factor: 1.0}
+    rewards:
+      correctness_weight: 1.0
+      format_weight: 0.1
+      math: {final_answer_regex: "(?i)final answer\\s*[:：]\\s*(.+)"}
+    generation: {max_new_tokens: 1024, temperature: 1.0, top_k: 0, top_p: 1.0, repetition_penalty: 1.0, seed: 1337, batch_size: 64, use_kv_cache: true, overflow: truncate_left}
+    entropy_floor: {value: 0.05, patience_steps: 50}
+    routing_metric_sample_tokens: 4096
+    validation_prompts: 256
+    optim: {lr: 1.0e-6, lr_min: 1.0e-6, betas: [0.9, 0.95], eps: 1.0e-8, weight_decay: 0.0, grad_clip: 1.0}
+    schedule: {type: constant, warmup_fraction: 0.02}
+    batch: {micro_batch_size: 8, grad_accum: 1}
+    distributed: {zero_stage: 1, find_unused_parameters: true}
+    moe: {update_routing_bias: false, bias_update_rate: 0.0, aux_loss_weight: 0.0}
+    dropout: 0.0
+    checkpoint_every_steps: 25
+    keep_last_checkpoints: 3
+    eval_every_steps: 25
+
+  distill:
+    enabled: true
+    offpolicy:
+      enabled: true
+      init_from: previous
+      output_uri: ${run.output_root_uri}/${run.name}/distill_offpolicy
+      use_doc_mask: true
+      prompts_datasets: [gsm8k_train, numinamath, mbpp_train, ultrafeedback_prompts]
+      max_prompts: 50000
+      samples_per_prompt: 1
+      max_response_tokens: 900
+      data:
+        sources:
+          - {dataset: teacher_traces, weight: 0.8}
+          - {dataset: tulu3_sft, weight: 0.2}
+        epochs: 1
+      optim: {lr: 1.0e-5, lr_min: 0.0, betas: [0.9, 0.95], eps: 1.0e-8, weight_decay: 0.0, grad_clip: 1.0}
+      schedule: {type: linear, warmup_fraction: 0.03}
+      batch: {micro_batch_size: 8, grad_accum: 16}
+      distributed: {zero_stage: 2, find_unused_parameters: true}
+      moe: {update_routing_bias: true, bias_update_rate: 1.0e-4, aux_loss_weight: 0.0}
+      dropout: 0.0
+      checkpoint_every_steps: 500
+      keep_last_checkpoints: 3
+      eval_every_steps: 500
+    onpolicy:
+      enabled: true
+      init_from: previous
+      output_uri: ${run.output_root_uri}/${run.name}/distill_onpolicy
+      data:
+        sources:
+          - {dataset: gsm8k_train, weight: 0.3}
+          - {dataset: numinamath, weight: 0.3}
+          - {dataset: ultrafeedback_prompts, weight: 0.4}
+      prompts_per_step: 64
+      total_steps: 300
+      validation_prompts: 256
+      generation: {max_new_tokens: 1024, temperature: 1.0, top_k: 0, top_p: 1.0, repetition_penalty: 1.0, seed: 1337, batch_size: 64, use_kv_cache: true, overflow: truncate_left}
+      optim: {lr: 1.0e-6, lr_min: 1.0e-6, betas: [0.9, 0.95], eps: 1.0e-8, weight_decay: 0.0, grad_clip: 1.0}
+      schedule: {type: constant, warmup_fraction: 0.02}
+      batch: {micro_batch_size: 8, grad_accum: 1}
+      distributed: {zero_stage: 1, find_unused_parameters: true}
+      moe: {update_routing_bias: false, bias_update_rate: 0.0, aux_loss_weight: 0.0}
+      dropout: 0.0
+      checkpoint_every_steps: 25
+      keep_last_checkpoints: 3
+      eval_every_steps: 25
+
+eval:
+  benchmarks:
+    mmlu: {dataset: mmlu, max_examples: null}
+    gsm8k: {dataset: gsm8k_test, max_examples: null, n_shot: 8, answer_regex: "####\\s*(-?[\\d,\\.]+)", base_prompt_uri: prompts/gsm8k_base_fewshot.txt, chat_prompt_uri: prompts/gsm8k_chat.txt}
+    math500: {dataset: math500, max_examples: null, chat_prompt_uri: prompts/math_chat.txt}
+    humaneval: {dataset: humaneval, max_examples: null, n_samples: 8, k_values: [1, 8], temperature: 0.8, top_p: 0.95, base_stop_strings: ["\ndef ", "\nclass ", "\nif __name__", "\nprint("], chat_prompt_uri: prompts/humaneval_chat.txt}
+    ifeval: {dataset: ifeval, max_examples: null}
+    alpaca_eval_lc: {dataset: alpaca_eval, max_examples: 400, max_iter: 50}
+    safety: {dataset: xstest, max_examples: null}
+    calibration: {bins: 10}
+    length: {dataset: alpaca_eval, n_prompts: 200}
+    adherence: {n_prompts: 200}
+
+gates:
+  on_failure: stop
+  min_improvement: 0.0
+  lower_is_better: [mmlu_ece]
+  tolerances:
+    mmlu_acc: 0.02
+    gsm8k_acc: 0.03
+    math500_acc: 0.03
+    humaneval_pass@1: 0.03
+    humaneval_pass@8: 0.03
+    ifeval_prompt_strict: 0.03
+    alpaca_lc_win_rate: 0.03
+    mmlu_ece: 0.05
+  require_improvement:
+    midtrain: [gsm8k_acc]
+    midtrain_long: []
+    sft: []
+    preference: [alpaca_lc_win_rate]
+    rlvr: [math500_acc]
+    distill_offpolicy: []
+    distill_onpolicy: []
+  thresholds:
+    length_ratio_max: 1.5
+    template_adherence_min: 0.95
+    safety_unsafe_refusal_min: 0.8
+    safety_safe_compliance_min: 0.8
+
+export:
+  output_uri: ${run.output_root_uri}/${run.name}/final_export
+  dtype: bf16
+
+launcher:
+  nnodes: 1
+  nproc_per_node: 8
+  extra_torchrun_args: []
+
+logging:
+  tensorboard: true
+  log_every_steps: 10
+  moe_usage_every_steps: 100
